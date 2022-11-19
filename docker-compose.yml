@@ -1,0 +1,122 @@
+version: '3.7'
+
+services:
+  setup:
+    build:
+      context: setup/
+      args:
+        ELASTIC_VERSION: ${ELASTIC_VERSION}
+    init: true
+    volumes:
+      - setup:/state:Z
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD:-}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    image: elasticsearch:8.5.0
+    volumes:
+      - ./files/elastic/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro,z
+      - elasticsearch:/usr/share/elasticsearch/data:z
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-}
+      discovery.type: single-node
+    mem_limit: 2000m
+    # cpu_count: 1
+    # cpus: 1
+    #deploy:
+    # resources:
+    #   limits:
+    #     cpus: '0.50'
+    #     memory: 50M
+    #     pids: 1
+    #   reservations:
+    #     cpus: '0.25'
+    #     memory: 20M
+    networks:
+      - elk
+
+
+
+  elasticapi:
+    build: 
+      context: api/
+    image: elasticsearch-api
+    environment:
+      - username=elastic
+      - password=${ELASTIC_PASSWORD:-}
+    volumes:
+      - ./api/monitor.py:/app/monitor.py
+    networks:
+      - elk
+    configs:
+      - source: apiconfig
+        target: /app/elastic-api.ini
+    depends_on:
+      - elasticsearch
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        window: 20s
+
+  logstash:
+    image: logstash:8.5.0
+    volumes:
+      - ./files/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro,Z
+      - ./files/logstash/pipeline:/usr/share/logstash/pipeline:ro,Z
+      - ./files/logstash/logs.log:/usr/share/logstash/logs.log
+    ports:
+      - "5044:5044"
+      - "50000:50000/tcp"
+      - "50000:50000/udp"
+      - "9600:9600"
+      - "10514:10514"
+    environment:
+      LS_JAVA_OPTS: -Xms256m -Xmx256m
+      #LOGSTASH_INTERNAL_PASSWORD: ${LOGSTASH_INTERNAL_PASSWORD:-}
+      LOGSTASH_INTERNAL_PASSWORD: ${ELASTIC_PASSWORD:-}
+    networks:
+      - elk
+    depends_on:
+      - elasticapi
+
+  kibana:
+    image: kibana:8.5.0
+    volumes:
+      - ./files/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml:ro,Z
+    ports:
+      - "5601:5601"
+    environment:
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-}
+      # Fleet plugin
+      KIBANA_FLEET_SETUP: '1'
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+networks:
+  elk:
+    driver: bridge
+
+volumes:
+  setup:
+  elasticsearch:
+
+configs:
+  apiconfig:
+    file: ./elastic-api.ini
+
+
+# docker exec -it elasticsearch /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s kibana
+# docker exec -it es-node01 /usr/share/elasticsearch/bin/elasticsearch-reset-password -u elastic
